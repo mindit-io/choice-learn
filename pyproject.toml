@@ -28,7 +28,12 @@ requires-python = ">=3.9,<3.13"
 dependencies = [
   "numpy>=1.24",
   "pandas>=1.5.3",
-  "tensorflow >=2.14, <2.17.0",
+  # Windows (CPU build ships via Intel):
+  "tensorflow-intel>=2.14,<2.17; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Non-Windows:
+  "tensorflow>=2.14,<2.17; sys_platform != 'win32'",
+  # Optional: if you actually need GCS filesystem on non-Windows, use the extra:
+  # "tensorflow[gcs-filesystem]>=2.14,<2.17; sys_platform != 'win32'"
   "tensorflow-probability >=0.22",
   "tqdm >=4.0.0",
   "tf_keras <3",
@@ -121,3 +126,6 @@ packages = ["choice_learn"]
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.uv]
+required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
