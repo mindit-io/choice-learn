@@ -33,6 +33,7 @@ class ChoiceDataset:
         features_by_ids=[],  # list of (name, FeaturesStorage)
         shared_features_by_choice_names=None,
         items_features_by_choice_names=None,
+        items_names=None,
     ):
         """Build the ChoiceDataset.
 
@@ -61,6 +62,9 @@ class ChoiceDataset:
         items_features_by_choice_names : tuple of (array_like, )
             list of names of the items_features_by_choice, default is None
             Shapes must match with items_features_by_choice
+        items_names : array_like, optional
+            Array of item identifiers (names/IDs) that map to item indices.
+            Length should match the number of items. Default is None.
         """
         if choices is None:
             # Done to keep a logical order of arguments, and has logic: choices have to be specified
@@ -360,6 +364,7 @@ class ChoiceDataset:
         self.items_features_by_choice = items_features_by_choice
         self.available_items_by_choice = available_items_by_choice
         self.choices = choices
+        self.items_names = items_names
 
         for fid in features_by_ids:
             if not isinstance(fid, Storage):
@@ -1038,6 +1043,7 @@ class ChoiceDataset:
             items_features_by_choice_names=items_features_names,
             available_items_by_choice=available_items_by_choice,
             choices=choices,
+            items_names=items_id,
         )
 
     @classmethod
@@ -1052,6 +1058,8 @@ class ChoiceDataset:
         choice_format="items_id",
     ):
         """Build numpy arrays for ChoiceDataset from a single dataframe in long format.
+
+        Optimized version using vectorized operations for improved performance.
 
         Parameters
         ----------
@@ -1081,32 +1089,64 @@ class ChoiceDataset:
         items = np.sort(df[items_id_column].unique())
         choices_ids = np.sort(df[choices_id_column].unique())
 
+        # Handle shared features
         if shared_features_columns is not None:
             shared_features_by_choice = df[
                 shared_features_columns + [choices_id_column]
             ].drop_duplicates()
             shared_features_by_choice = shared_features_by_choice.set_index(choices_id_column)
             shared_features_by_choice = shared_features_by_choice.loc[choices_ids].to_numpy()
-
             shared_features_by_choice_names = shared_features_columns
         else:
             shared_features_by_choice = None
             shared_features_by_choice_names = None
 
-        (
-            items_features_by_choice,
-            avaialble_items_by_choice,
-        ) = cls._long_df_to_items_features_array(
-            df,
-            features=items_features_columns,
-            items_id_column=items_id_column,
-            choices_id_column=choices_id_column,
-            items_index=items,
-            choices_index=choices_ids,
-        )
+        # Handle items features - OPTIMIZED VERSION
+        if items_features_columns is not None:
+            # Create a complete index with all choice_id x item_id combinations
+            full_index = pd.MultiIndex.from_product(
+                [choices_ids, items],
+                names=[choices_id_column, items_id_column]
+            )
 
-        items_features_by_choice_names = items_features_columns
+            # Get the original combinations that exist in the dataframe
+            original_index = df.set_index([choices_id_column, items_id_column]).index
 
+            # Set multiindex and reindex to include all combinations
+            df_items = df.set_index([choices_id_column, items_id_column])
+            df_items = df_items.reindex(full_index, fill_value=0)
+
+            # Extract items features
+            items_features_by_choice = df_items[items_features_columns].to_numpy()
+            items_features_by_choice = items_features_by_choice.reshape(
+                len(choices_ids), len(items), len(items_features_columns)
+            )
+
+            # Compute availabilities based on presence in original dataframe
+            # An item is available if it was present in the original data
+            available_mask = full_index.isin(original_index)
+            available_items_by_choice = (
+                available_mask
+                .reshape(len(choices_ids), len(items))
+                .astype("float32")
+            )
+
+            items_features_by_choice_names = items_features_columns
+        else:
+            # If no items features, still compute availabilities from presence in df
+            df_presence = (
+                df.groupby([choices_id_column, items_id_column])
+                .size()
+                .unstack(fill_value=0)
+            )
+            df_presence = df_presence.reindex(choices_ids, fill_value=0)
+            df_presence = df_presence.reindex(columns=items, fill_value=0)
+            available_items_by_choice = (df_presence > 0).astype("float32").to_numpy()
+
+            items_features_by_choice = None
+            items_features_by_choice_names = None
+
+        # Handle choices
         if choice_format == "items_id":
             choices = df[[choices_column, choices_id_column]].drop_duplicates(choices_id_column)
             choices = choices.set_index(choices_id_column)
@@ -1126,13 +1166,15 @@ class ChoiceDataset:
             raise ValueError(
                 f"choice_format {choice_format} not recognized. Must be in ['items_id', 'one_zero']"
             )
+
         return ChoiceDataset(
             shared_features_by_choice=shared_features_by_choice,
             items_features_by_choice=items_features_by_choice,
-            available_items_by_choice=avaialble_items_by_choice,
+            available_items_by_choice=available_items_by_choice,
             choices=choices,
             shared_features_by_choice_names=shared_features_by_choice_names,
             items_features_by_choice_names=items_features_by_choice_names,
+            items_names=items,
         )
 
     def save(self):
@@ -1451,6 +1493,7 @@ class ChoiceDataset:
             shared_features_by_choice_names=shared_features_by_choice_names,
             items_features_by_choice_names=items_features_by_choice_names,
             features_by_ids=self.features_by_ids,
+            items_names=self.items_names,
         )
 
     @property
@@ -1539,3 +1582,14 @@ class ChoiceDataset:
                 n_features += items_features.shape[2]
             return n_features
         return 0
+
+    def get_items_names(self):
+        """Access the item names/identifiers if available.
+
+        Returns
+        -------
+        array_like or None
+            Array of item identifiers (names/IDs) that map to item indices,
+            or None if not set
+        """
+        return self.items_names
