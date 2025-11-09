@@ -1,6 +1,9 @@
 numpy>=1.24
 pandas>=1.5
-tensorflow>=2.18, <2.19
+#tensorflow>=2.18, <2.19
+tensorflow-intel>=2.14,<2.17 ; sys_platform == "win32" and platform_machine == "AMD64"
+tensorflow>=2.14,<2.17       ; sys_platform != "win32"
 tensorflow_probability>=0.22
-tf_keras>=2.18, <2.19
+#tf_keras>=2.18, <2.19
+tf-keras~=2.16
 tqdm>=4.0
